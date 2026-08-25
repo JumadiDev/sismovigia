@@ -1,0 +1,143 @@
+# ============================================================
+# SISMOVIGÍA · Infraestructura
+# db (TimescaleDB) + redis (bus de eventos) + mosquitto (MQTT IoT)
+# + api (FastAPI) + worker-usgs (ingesta USGS)
+# Los workers ssn/sasmex/iot se agregan en fases posteriores.
+# ============================================================
+services:
+
+  db:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sismovigia}
+      POSTGRES_USER: ${POSTGRES_USER:-sismovigia}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sismovigia} -d ${POSTGRES_DB:-sismovigia}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT
+      - "9001:9001"   # MQTT over WebSocket (opcional)
+    volumes:
+      - ./mosquitto/config:/mosquitto/config:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/broker/version' -C 1 -W 3 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://sismovigia:${DB_PASSWORD}@db:5432/sismovigia
+      REDIS_URL: redis://redis:6379/0
+      FIREBASE_CREDENTIALS: /app/firebase-service-account.json
+    volumes:
+      - ./firebase-service-account.json:/app/firebase-service-account.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+
+  worker-usgs:
+    build:
+      context: ./workers
+      dockerfile: usgs/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://sismovigia:${DB_PASSWORD}@db:5432/sismovigia
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-ssn:
+    build:
+      context: ./workers
+      dockerfile: ssn/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://sismovigia:${DB_PASSWORD}@db:5432/sismovigia
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-sasmex:
+    build:
+      context: ./workers
+      dockerfile: sasmex/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://sismovigia:${DB_PASSWORD}@db:5432/sismovigia
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker-iot:
+    build:
+      context: ./workers
+      dockerfile: iot/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://sismovigia:${DB_PASSWORD}@db:5432/sismovigia
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+    depends_on:
+      db:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+
+  # DEMO: publica telemetría sintética (perfil "sim"; no es parte del sistema real)
+  iot-simulator:
+    build:
+      context: ./workers
+      dockerfile: iot/Dockerfile
+    profiles: ["sim"]
+    restart: unless-stopped
+    command: ["python", "-u", "simulator.py", "--hz", "10"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+volumes:
+  db_data:
+  mosquitto_data:
+  mosquitto_log:
