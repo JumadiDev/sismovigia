@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+/* SISMOVIGÍA · Tokens del SPEC (sismovigia-dashboard-SPEC.md) */
+@theme {
+  --color-background: #05070a;
+  --color-surface: #0a0f14;
+  --color-surface-2: #101821;
+  --color-line: #1c2a35;
+  --color-line-strong: #2c4050;
+  --color-text: #e6f1ee;
+  --color-dim: #7b8c99;
+  --color-faint: #46545f;
+  --color-teal: #2de1c2;
+  --color-amber: #ffb020;
+  --color-red: #ff3b4e;
+  --color-magenta: #ff5cf0;
+
+  --font-mono: var(--font-plex), ui-monospace, SFMono-Regular, monospace;
+  --font-sans: var(--font-grotesk), system-ui, -apple-system, sans-serif;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  background-image:
+    linear-gradient(rgba(45, 225, 194, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(45, 225, 194, 0.035) 1px, transparent 1px);
+  background-size: 42px 42px;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-surface);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 4px;
+}
