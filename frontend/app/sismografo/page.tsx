@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, AlertCircle, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Activity, AlertCircle, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getJson } from "@/lib/api";
+import { useTelemetry } from "@/lib/use-telemetry";
 import type { Station, TelemetrySample } from "@/lib/types";
 
 const AXES = [
@@ -28,7 +29,7 @@ function WaveSkeleton() {
 function Wave({ samples, axis }: { samples: TelemetrySample[]; axis: (typeof AXES)[number] }) {
   const W = 900;
   const H = 110;
-  const values = samples.map((s) => s[axis.key]);
+  const values = samples.map((s) => s[axis.key] ?? 0);
   if (values.length < 2) {
     return (
       <div style={{ height: H }} className="flex items-center justify-center text-[10px] text-faint">
@@ -68,19 +69,17 @@ function Wave({ samples, axis }: { samples: TelemetrySample[]; axis: (typeof AXE
 export default function SismografoView() {
   const [stations, setStations] = useState<Station[]>([]);
   const [station, setStation] = useState("SX-002");
-  const [samples, setSamples] = useState<TelemetrySample[]>([]);
   const [meta, setMeta] = useState<Station | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [stationsError, setStationsError] = useState<string | null>(null);
+  const { status, samples, error: telemetryError } = useTelemetry(station);
 
   const loadStations = useCallback(async () => {
     try {
       const list = await getJson<Station[]>("/api/stations");
       setStations(list);
-      setError(null);
+      setStationsError(null);
     } catch {
-      setError("No se pudieron cargar las estaciones");
+      setStationsError("No se pudieron cargar las estaciones");
     }
   }, []);
 
@@ -89,32 +88,13 @@ export default function SismografoView() {
   }, [loadStations]);
 
   useEffect(() => {
-    let alive = true;
-    const fetchSamples = async () => {
-      try {
-        const s = await getJson<TelemetrySample[]>(`/api/telemetry/recent?station=${station}&limit=400`);
-        if (alive) {
-          setSamples(s);
-          setError(null);
-        }
-        const st = stations.find((x) => x.id === station) ?? null;
-        if (alive) setMeta(st);
-      } catch {
-        if (alive) setError("Error de conexión con el servidor");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    };
-    setLoading(true);
-    fetchSamples();
-    timer.current = setInterval(fetchSamples, 2000);
-    return () => {
-      alive = false;
-      if (timer.current) clearInterval(timer.current);
-    };
+    const st = stations.find((x) => x.id === station) ?? null;
+    setMeta(st);
   }, [station, stations]);
 
   const latest = samples[samples.length - 1];
+  const isConnected = status === "live";
+  const isLoading = status === "connecting";
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-6">
@@ -129,6 +109,16 @@ export default function SismografoView() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 text-[10px]">
+            {isConnected ? (
+              <Wifi className="h-3 w-3 text-teal" />
+            ) : (
+              <WifiOff className="h-3 w-3 text-red" />
+            )}
+            <span className={isConnected ? "text-teal" : "text-red"}>
+              {isConnected ? "en vivo" : "desconectado"}
+            </span>
+          </div>
           <Badge status={meta?.status === "online" ? "on" : meta?.status === "degraded" ? "deg" : "off"}>
             {meta?.status ?? "offline"}
           </Badge>
@@ -146,10 +136,10 @@ export default function SismografoView() {
         </div>
       </div>
 
-      {error && (
+      {(stationsError || telemetryError) && (
         <div className="flex items-center gap-2 rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-xs text-red">
           <AlertCircle className="h-4 w-4" />
-          <span>{error}</span>
+          <span>{stationsError || telemetryError}</span>
           <button onClick={loadStations} className="ml-auto text-red hover:text-red/80">
             <RefreshCw className="h-3 w-3" />
           </button>
@@ -165,7 +155,7 @@ export default function SismografoView() {
               </CardTitle>
             </CardHeader>
             <div className="flex flex-col gap-4">
-              {loading ? (
+              {isLoading ? (
                 AXES.map((a) => <WaveSkeleton key={a.key} />)
               ) : (
                 AXES.map((a) => <Wave key={a.key} samples={samples} axis={a} />)
@@ -180,7 +170,7 @@ export default function SismografoView() {
               <CardTitle>Muestra actual</CardTitle>
               <span className="text-[10px] text-faint">{samples.length} puntos</span>
             </CardHeader>
-            {loading ? (
+            {isLoading ? (
               <div className="grid grid-cols-2 gap-2">
                 {Array.from({ length: 6 }).map((_, i) => (
                   <div key={i} className="h-14 animate-pulse rounded-sm bg-line/50" />
@@ -214,7 +204,7 @@ export default function SismografoView() {
             <CardHeader>
               <CardTitle>Muestras · 24 h</CardTitle>
             </CardHeader>
-            {loading ? (
+            {isLoading ? (
               <div className="h-10 w-24 animate-pulse rounded bg-line/50" />
             ) : (
               <>

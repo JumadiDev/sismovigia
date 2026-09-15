@@ -18,7 +18,8 @@ from fastapi import WebSocket
 
 log = logging.getLogger("sismovigia.ws")
 
-CHANNEL = os.environ.get("REDIS_CHANNEL", "events:new")
+CHANNEL_EVENTS = os.environ.get("REDIS_CHANNEL", "events:new")
+CHANNEL_TELEMETRY = os.environ.get("REDIS_CHANNEL_TELEMETRY", "telemetry:new")
 MAX_CONNECTIONS_PER_IP = int(os.environ.get("WS_MAX_CONN_PER_IP", "5"))
 
 
@@ -81,7 +82,7 @@ async def sender(ws: WebSocket, q: asyncio.Queue) -> None:
 
 
 async def redis_listener(app) -> None:
-    """Suscriptor único a events:new → broadcast a todas las conexiones."""
+    """Suscriptor a events:new y telemetry:new → broadcast a todas las conexiones."""
     url = os.environ.get("REDIS_URL")
     if not url:
         log.warning("REDIS_URL no definido: /ws/live solo enviará snapshots")
@@ -90,7 +91,7 @@ async def redis_listener(app) -> None:
     while True:
         try:
             async with client.pubsub() as pubsub:
-                await pubsub.subscribe(CHANNEL)
+                await pubsub.subscribe(CHANNEL_EVENTS, CHANNEL_TELEMETRY)
                 async for msg in pubsub.listen():
                     if msg.get("type") != "message":
                         continue
@@ -98,27 +99,30 @@ async def redis_listener(app) -> None:
                         data = json.loads(msg["data"])
                     except (TypeError, json.JSONDecodeError):
                         continue
-                    app.state.ws.broadcast({"type": "event:new", "data": data})
-                    # Push notification para alertas y precauciones
-                    try:
-                        from services.notification import send_push, is_initialized
-                        if is_initialized() and data.get("alert_level") in ("alerta", "precaucion"):
-                            level_label = "ALERTA SÍSMICA" if data["alert_level"] == "alerta" else "PRECAUCIÓN"
-                            mag = data.get("magnitude", 0)
-                            region = data.get("region_text", "desconocida")
-                            await send_push(
-                                pool=app.state.pool,
-                                title=f"{level_label} — M{mag:.1f}",
-                                body=f"Sismo en {region}. Profundidad: {data.get('depth_km', '?')} km",
-                                data={
-                                    "event_id": str(data.get("id", "")),
-                                    "magnitude": str(mag),
-                                    "alert_level": data["alert_level"],
-                                },
-                                alert_level=data["alert_level"],
-                            )
-                    except Exception as exc:
-                        log.debug("Push no enviado: %s", exc)
+                    channel = msg.get("channel")
+                    if channel == CHANNEL_EVENTS:
+                        app.state.ws.broadcast({"type": "event:new", "data": data})
+                        try:
+                            from services.notification import send_push, is_initialized
+                            if is_initialized() and data.get("alert_level") in ("alerta", "precaucion"):
+                                level_label = "ALERTA SÍSMICA" if data["alert_level"] == "alerta" else "PRECAUCIÓN"
+                                mag = data.get("magnitude", 0)
+                                region = data.get("region_text", "desconocida")
+                                await send_push(
+                                    pool=app.state.pool,
+                                    title=f"{level_label} — M{mag:.1f}",
+                                    body=f"Sismo en {region}. Profundidad: {data.get('depth_km', '?')} km",
+                                    data={
+                                        "event_id": str(data.get("id", "")),
+                                        "magnitude": str(mag),
+                                        "alert_level": data["alert_level"],
+                                    },
+                                    alert_level=data["alert_level"],
+                                )
+                        except Exception as exc:
+                            log.debug("Push no enviado: %s", exc)
+                    elif channel == CHANNEL_TELEMETRY:
+                        app.state.ws.broadcast({"type": "telemetry:new", "data": data})
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -127,7 +131,7 @@ async def redis_listener(app) -> None:
 
 
 async def build_snapshot(pool) -> dict:
-    """Instantánea inicial: eventos recientes + métricas en vivo."""
+    """Instantánea inicial: eventos recientes + métricas en vivo + telemetría."""
     events = await pool.fetch(
         """
         SELECT id, occurred_at, latitude, longitude, depth_km,
@@ -160,12 +164,23 @@ async def build_snapshot(pool) -> dict:
         LIMIT 10
         """
     )
+    telemetry = await pool.fetch(
+        """
+        SELECT station_id, accel_x, accel_y, accel_z,
+               temperature, rssi, battery_v, sampled_at
+        FROM telemetry
+        WHERE station_id = 'SX-002'
+        ORDER BY sampled_at DESC
+        LIMIT 400
+        """
+    )
     max_mag = max_ev["magnitude"] if max_ev else None
     return {
         "type": "snapshot",
         "generated_at": datetime.now(timezone.utc),
         "events": [dict(e) for e in events],
         "news": [dict(n) for n in news],
+        "telemetry": [dict(t) for t in reversed(telemetry)],
         "metrics": {
             "events_24h": len(events),
             "max_magnitude": max_mag,

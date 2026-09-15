@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 import asyncpg
 from asyncio_mqtt import Client as MqttClient
 from common import db as dbmod
+from common.pubsub import Publisher
 
 log = logging.getLogger("sismovigia.iot")
 
@@ -55,8 +56,9 @@ def topic_matches(topic, pattern: str) -> bool:
 class TelemetryWriter:
     """Buffer + bulk writer idempotente sobre la hipertabla telemetry."""
 
-    def __init__(self, pool: asyncpg.Pool):
+    def __init__(self, pool: asyncpg.Pool, publisher: Publisher | None = None):
         self.pool = pool
+        self.publisher = publisher
         self.buffer: list[tuple] = []
         self.updated: set[str] = set()
 
@@ -115,6 +117,19 @@ class TelemetryWriter:
                 "UPDATE stations SET last_seen = now() WHERE id = ANY($1::text[])",
                 station_ids,
             )
+            # Publicar en Redis para el WebSocket en vivo
+            if self.publisher:
+                for row in buffer:
+                    await self.publisher.publish_telemetry({
+                        "station_id": row[0],
+                        "accel_x": row[1],
+                        "accel_y": row[2],
+                        "accel_z": row[3],
+                        "temperature": row[4],
+                        "rssi": row[5],
+                        "battery_v": row[6],
+                        "sampled_at": row[7].isoformat(),
+                    })
 
 
 async def main() -> None:
@@ -125,7 +140,8 @@ async def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="[iot] %(message)s")
     pool = await dbmod.get_pool()
-    writer = TelemetryWriter(pool)
+    publisher = Publisher()
+    writer = TelemetryWriter(pool, publisher)
 
     topics = [
         f"{TOPIC_PREFIX}/+/telemetry",
@@ -168,6 +184,7 @@ async def main() -> None:
         finally:
             consumer_task.cancel()
             await writer.flush()
+            await publisher.close()
             await pool.close()
 
 

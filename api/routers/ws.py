@@ -2,8 +2,9 @@
 """Ruta WebSocket /ws/live.
 
 Protocolo:
-  snapshot   → {type, generated_at, events[], metrics}
-  event:new  → {type, data: canonical_event}
+  snapshot       → {type, generated_at, events[], metrics, telemetry[]}
+  event:new      → {type, data: canonical_event}
+  telemetry:new  → {type, data: telemetry_sample}
 """
 import asyncio
 import json
@@ -48,8 +49,37 @@ async def ws_live(ws: WebSocket):
 
     try:
         while True:
-            # Recibe pings del cliente; al desconectarse lanza WebSocketDisconnect.
-            await ws.receive_text()
+            # Recibe pings y suscripciones del cliente; al desconectarse lanza WebSocketDisconnect.
+            raw = await ws.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("type") == "subscribe:telemetry":
+                station = msg.get("station")
+                if station:
+                    try:
+                        rows = await ws.app.state.pool.fetch(
+                            """
+                            SELECT station_id, accel_x, accel_y, accel_z,
+                                   temperature, rssi, battery_v, sampled_at
+                            FROM telemetry
+                            WHERE station_id = $1
+                            ORDER BY sampled_at DESC
+                            LIMIT 400
+                            """,
+                            station,
+                        )
+                        telem = [dict(r) for r in reversed(rows)]
+                        await q.put(
+                            json.dumps(
+                                {"type": "snapshot:telemetry", "station": station, "telemetry": telem},
+                                default=_json_default,
+                                ensure_ascii=False,
+                            )
+                        )
+                    except Exception as exc:
+                        log.error("snapshot telemetría falló: %s", exc)
     except WebSocketDisconnect:
         pass
     finally:
