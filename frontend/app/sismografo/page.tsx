@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity } from "lucide-react";
+import { Activity, AlertCircle, RefreshCw } from "lucide-react";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getJson } from "@/lib/api";
@@ -12,6 +12,18 @@ const AXES = [
   { key: "accel_y", color: "#ff5cf0", label: "Y" },
   { key: "accel_z", color: "#ffb020", label: "Z" },
 ] as const;
+
+function WaveSkeleton() {
+  return (
+    <div className="animate-pulse">
+      <div className="mb-1 flex items-center gap-2">
+        <div className="h-2 w-2 rounded-full bg-line" />
+        <div className="h-2 w-8 bg-line" />
+      </div>
+      <div className="h-[110px] w-full rounded-sm bg-line/50" />
+    </div>
+  );
+}
 
 function Wave({ samples, axis }: { samples: TelemetrySample[]; axis: (typeof AXES)[number] }) {
   const W = 900;
@@ -58,33 +70,42 @@ export default function SismografoView() {
   const [station, setStation] = useState("SX-002");
   const [samples, setSamples] = useState<TelemetrySample[]>([]);
   const [meta, setMeta] = useState<Station | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const load = useCallback(async () => {
+  const loadStations = useCallback(async () => {
     try {
       const list = await getJson<Station[]>("/api/stations");
       setStations(list);
+      setError(null);
     } catch {
-      /* sin API */
+      setError("No se pudieron cargar las estaciones");
     }
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    loadStations();
+  }, [loadStations]);
 
   useEffect(() => {
     let alive = true;
     const fetchSamples = async () => {
       try {
         const s = await getJson<TelemetrySample[]>(`/api/telemetry/recent?station=${station}&limit=400`);
-        if (alive) setSamples(s);
+        if (alive) {
+          setSamples(s);
+          setError(null);
+        }
         const st = stations.find((x) => x.id === station) ?? null;
         if (alive) setMeta(st);
       } catch {
-        /* sin datos aún */
+        if (alive) setError("Error de conexión con el servidor");
+      } finally {
+        if (alive) setLoading(false);
       }
     };
+    setLoading(true);
     fetchSamples();
     timer.current = setInterval(fetchSamples, 2000);
     return () => {
@@ -107,18 +128,33 @@ export default function SismografoView() {
             <p className="text-[10px] uppercase tracking-[0.3em] text-dim">telemetría en vivo · red IoT</p>
           </div>
         </div>
-        <select
-          value={station}
-          onChange={(e) => setStation(e.target.value)}
-          className="h-9 rounded-sm border border-line bg-surface px-3 font-mono text-xs text-text outline-none focus:border-teal"
-        >
-          {stations.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.id} · {s.name}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <Badge status={meta?.status === "online" ? "on" : meta?.status === "degraded" ? "deg" : "off"}>
+            {meta?.status ?? "offline"}
+          </Badge>
+          <select
+            value={station}
+            onChange={(e) => setStation(e.target.value)}
+            className="h-9 rounded-sm border border-line bg-surface px-3 font-mono text-xs text-text outline-none focus:border-teal"
+          >
+            {stations.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.id} · {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
+
+      {error && (
+        <div className="flex items-center gap-2 rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-xs text-red">
+          <AlertCircle className="h-4 w-4" />
+          <span>{error}</span>
+          <button onClick={loadStations} className="ml-auto text-red hover:text-red/80">
+            <RefreshCw className="h-3 w-3" />
+          </button>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">
@@ -127,14 +163,13 @@ export default function SismografoView() {
               <CardTitle>
                 {meta ? `${meta.id} · ${meta.name}` : station} — aceleración
               </CardTitle>
-              <Badge status={meta?.status === "online" ? "on" : meta?.status === "degraded" ? "deg" : "off"}>
-                {meta?.status ?? "…"}
-              </Badge>
             </CardHeader>
             <div className="flex flex-col gap-4">
-              {AXES.map((a) => (
-                <Wave key={a.key} samples={samples} axis={a} />
-              ))}
+              {loading ? (
+                AXES.map((a) => <WaveSkeleton key={a.key} />)
+              ) : (
+                AXES.map((a) => <Wave key={a.key} samples={samples} axis={a} />)
+              )}
             </div>
           </Card>
         </div>
@@ -145,7 +180,13 @@ export default function SismografoView() {
               <CardTitle>Muestra actual</CardTitle>
               <span className="text-[10px] text-faint">{samples.length} puntos</span>
             </CardHeader>
-            {latest ? (
+            {loading ? (
+              <div className="grid grid-cols-2 gap-2">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="h-14 animate-pulse rounded-sm bg-line/50" />
+                ))}
+              </div>
+            ) : latest ? (
               <dl className="grid grid-cols-2 gap-2 text-center">
                 {(
                   [
@@ -173,10 +214,16 @@ export default function SismografoView() {
             <CardHeader>
               <CardTitle>Muestras · 24 h</CardTitle>
             </CardHeader>
-            <p className="font-sans text-3xl font-bold text-teal">{meta?.samples_24h ?? 0}</p>
-            <p className="mt-1 text-[10px] text-faint">
-              {meta?.location ?? ""} · firmware {meta?.firmware ?? "—"}
-            </p>
+            {loading ? (
+              <div className="h-10 w-24 animate-pulse rounded bg-line/50" />
+            ) : (
+              <>
+                <p className="font-sans text-3xl font-bold text-teal">{meta?.samples_24h ?? 0}</p>
+                <p className="mt-1 text-[10px] text-faint">
+                  {meta?.location ?? ""} · firmware {meta?.firmware ?? "—"}
+                </p>
+              </>
+            )}
           </Card>
         </div>
       </div>
