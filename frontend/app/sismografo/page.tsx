@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Activity, AlertCircle, RefreshCw, Wifi, WifiOff } from "lucide-react";
+import { Activity, AlertCircle, Pause, Play, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getJson } from "@/lib/api";
@@ -9,10 +9,14 @@ import { useTelemetry } from "@/lib/use-telemetry";
 import type { Station, TelemetrySample } from "@/lib/types";
 
 const AXES = [
-  { key: "accel_x", color: "#2de1c2", label: "X" },
-  { key: "accel_y", color: "#ff5cf0", label: "Y" },
-  { key: "accel_z", color: "#ffb020", label: "Z" },
+  { key: "accel_x", color: "#2de1c2", label: "X", range: 0.5 },
+  { key: "accel_y", color: "#ff5cf0", label: "Y", range: 0.5 },
+  { key: "accel_z", color: "#ffb020", label: "Z", range: 1.5 },
 ] as const;
+
+type Axis = (typeof AXES)[number];
+
+const STATION_KEY = "sismovigia:sismografo:station";
 
 function WaveSkeleton() {
   return (
@@ -26,9 +30,10 @@ function WaveSkeleton() {
   );
 }
 
-function Wave({ samples, axis }: { samples: TelemetrySample[]; axis: (typeof AXES)[number] }) {
+function Wave({ samples, axis }: { samples: TelemetrySample[]; axis: Axis }) {
   const W = 900;
   const H = 110;
+  const pad = 10;
   const values = samples.map((s) => s[axis.key] ?? 0);
   if (values.length < 2) {
     return (
@@ -37,23 +42,25 @@ function Wave({ samples, axis }: { samples: TelemetrySample[]; axis: (typeof AXE
       </div>
     );
   }
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min || 1;
+  const [minV, maxV] = [-axis.range, axis.range];
+  const span = maxV - minV;
+  const y = (v: number) => (H - pad - ((v - minV) / span) * (H - pad * 2)).toFixed(1);
   const step = W / (values.length - 1);
-  const pts = values
-    .map((v, i) => `${(i * step).toFixed(1)},${(H - 6 - ((v - min) / span) * (H - 12)).toFixed(1)}`)
-    .join(" ");
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${y(v)}`).join(" ");
+  const yZero = y(0);
   return (
     <div>
       <div className="mb-1 flex items-center gap-2 text-[9px] uppercase tracking-widest">
         <span style={{ color: axis.color }}>●</span>
         <span className="text-dim">eje {axis.label}</span>
         <span className="ml-auto text-faint">
-          rango {min.toFixed(3)} … {max.toFixed(3)} g
+          escala ±{axis.range} g
         </span>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-[110px] w-full">
+        <line x1="0" y1={yZero} x2={W} y2={yZero} stroke="#ffffff14" strokeDasharray="4 4" />
+        <line x1="0" y1={y(maxV)} x2={W} y2={y(maxV)} stroke="#ffffff0d" />
+        <line x1="0" y1={y(minV)} x2={W} y2={y(minV)} stroke="#ffffff0d" />
         <polyline
           points={pts}
           fill="none"
@@ -68,10 +75,18 @@ function Wave({ samples, axis }: { samples: TelemetrySample[]; axis: (typeof AXE
 
 export default function SismografoView() {
   const [stations, setStations] = useState<Station[]>([]);
-  const [station, setStation] = useState("SX-002");
+  const [station, setStation] = useState<string>(() => {
+    if (typeof window === "undefined") return "SX-002";
+    return localStorage.getItem(STATION_KEY) ?? "SX-002";
+  });
+  const [paused, setPaused] = useState(false);
   const [meta, setMeta] = useState<Station | null>(null);
   const [stationsError, setStationsError] = useState<string | null>(null);
-  const { status, samples, error: telemetryError } = useTelemetry(station);
+  const { status, samples, error: telemetryError } = useTelemetry(station, !paused);
+
+  useEffect(() => {
+    localStorage.setItem(STATION_KEY, station);
+  }, [station]);
 
   const loadStations = useCallback(async () => {
     try {
@@ -93,8 +108,8 @@ export default function SismografoView() {
   }, [station, stations]);
 
   const latest = samples[samples.length - 1];
-  const isConnected = status === "live";
-  const isLoading = status === "connecting";
+  const isConnected = status === "live" && !paused;
+  const isLoading = status === "connecting" && !paused;
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-6">
@@ -116,9 +131,17 @@ export default function SismografoView() {
               <WifiOff className="h-3 w-3 text-red" />
             )}
             <span className={isConnected ? "text-teal" : "text-red"}>
-              {isConnected ? "en vivo" : "desconectado"}
+              {paused ? "pausado" : isConnected ? "en vivo" : "desconectado"}
             </span>
           </div>
+          <button
+            onClick={() => setPaused((p) => !p)}
+            className="flex h-9 items-center gap-1.5 rounded-sm border border-line bg-surface px-3 text-xs text-dim outline-none focus:border-teal"
+            title={paused ? "Reanudar telemetría" : "Pausar telemetría"}
+          >
+            {paused ? <Play className="h-3.5 w-3.5 text-teal" /> : <Pause className="h-3.5 w-3.5" />}
+            {paused ? "reanudar" : "pausa"}
+          </button>
           <Badge status={meta?.status === "online" ? "on" : meta?.status === "degraded" ? "deg" : "off"}>
             {meta?.status ?? "offline"}
           </Badge>

@@ -12,7 +12,7 @@ export interface TelemetryState {
   error: string | null;
 }
 
-export function useTelemetry(station: string): TelemetryState {
+export function useTelemetry(station: string, active = true): TelemetryState {
   const [state, setState] = useState<TelemetryState>({
     status: "connecting",
     samples: [],
@@ -21,15 +21,11 @@ export function useTelemetry(station: string): TelemetryState {
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef(0);
   const stationRef = useRef(station);
-
-  useEffect(() => {
-    stationRef.current = station;
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "subscribe:telemetry", station }));
-    }
-  }, [station]);
+  const activeRef = useRef(active);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const connect = useCallback(() => {
+    if (!activeRef.current) return;
     const ws = new WebSocket(wsUrl());
     wsRef.current = ws;
 
@@ -43,7 +39,7 @@ export function useTelemetry(station: string): TelemetryState {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === "snapshot:telemetry" && msg.telemetry) {
-          setState((s) => ({ ...s, samples: msg.telemetry }));
+          setState((s) => ({ ...s, samples: msg.telemetry, status: "live" }));
         } else if (msg.type === "telemetry:new" && msg.data) {
           setState((s) => {
             const sample = msg.data as TelemetrySample;
@@ -62,18 +58,34 @@ export function useTelemetry(station: string): TelemetryState {
       setState((s) => ({ ...s, status: "offline" }));
       retryRef.current += 1;
       const delay = Math.min(30000, 2000 * 2 ** retryRef.current);
-      setTimeout(connect, delay);
+      timerRef.current = setTimeout(connect, delay);
     };
 
     ws.onerror = () => ws.close();
   }, []);
 
   useEffect(() => {
-    connect();
+    activeRef.current = active;
+    if (active) {
+      retryRef.current = 0;
+      connect();
+    }
     return () => {
       wsRef.current?.close();
+      wsRef.current = null;
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
     };
-  }, [connect]);
+  }, [active, connect]);
+
+  useEffect(() => {
+    stationRef.current = station;
+    if (activeRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "subscribe:telemetry", station }));
+    }
+  }, [station]);
 
   return state;
 }
