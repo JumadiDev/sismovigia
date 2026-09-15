@@ -114,10 +114,13 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://sismovigia:${DB_PASSWORD}@db:5432/sismovigia
+      REDIS_URL: redis://redis:6379/0
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       mosquitto:
         condition: service_healthy
