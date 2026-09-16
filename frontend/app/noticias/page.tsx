@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Newspaper, ExternalLink } from "lucide-react";
+import { Newspaper, ExternalLink, TriangleAlert } from "lucide-react";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { getJson, timeAgo } from "@/lib/api";
 import { cn } from "@/components/lib";
@@ -62,6 +62,14 @@ export default function NoticiasView() {
             {f.label}
           </button>
         ))}
+      </div>
+
+      <div className="flex items-start gap-2 rounded-sm border border-amber/40 bg-amber/10 px-3 py-2 text-[11px] leading-relaxed text-amber">
+        <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber" />
+        <span>
+          Este panel <span className="font-semibold">no sustituye</span> al <span className="font-semibold">Sistema
+          de Alerta Sísmica Mexicano (SASMEX)</span>. Datos con fines de monitoreo e investigación.
+        </span>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

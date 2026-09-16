@@ -40,13 +40,13 @@ export function StationPanel({ online, total }: { online: number; total: number 
           <span className="text-text">100 SPS</span> hacia la hipertabla de telemetría.
         </p>
       </div>
-      <div className="mt-3 flex items-start gap-2 border-t border-line pt-3 text-[10px] leading-relaxed text-faint">
-        <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber" />
-        <span>
-          Este panel no sustituye el Sistema de Alerta Sísmica Mexicano (SASMEX). Datos con fines de
-          monitoreo e investigación.
-        </span>
-      </div>
+    <div className="mt-3 flex items-start gap-2 rounded-sm border border-amber/40 bg-amber/10 px-3 py-2 text-[11px] leading-relaxed text-amber">
+      <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber" />
+      <span>
+        Este panel <span className="font-semibold">no sustituye</span> el <span className="font-semibold">Sistema de Alerta
+        Sísmica Mexicano (SASMEX)</span>. Datos con fines de monitoreo e investigación.
+      </span>
+    </div>
     </Card>
   );
 }
